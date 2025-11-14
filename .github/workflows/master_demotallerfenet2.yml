@@ -36,6 +36,7 @@ jobs:
           path: ${{env.DOTNET_ROOT}}/myapp
 
   deploy:
+    if: false
     runs-on: windows-latest
     needs: build
     permissions:
@@ -62,4 +63,5 @@ jobs:
           app-name: 'DemoTallerFeNET2'
           slot-name: 'Production'
           package: .
+
           
