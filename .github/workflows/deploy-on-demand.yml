@@ -1,0 +1,83 @@
+
+name: Deploy on demand (Frontend or Backend)
+
+on:
+  workflow_dispatch:
+    inputs:
+      app:
+        description: "Choose which project to deploy"
+        required: true
+        type: choice
+        options:
+          - frontend
+          - backend
+      dotnet_version:
+        description: ".NET SDK version"
+        required: false
+        default: "8.x"
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CONFIGURATION: Release
+  FRONTEND_PROJECT: Demos ORT/Frontend/Frontend.csproj
+  BACKEND_PROJECT: Demos ORT/Backend/Backend.csproj
+  PUBLISH_DIR: publish
+
+jobs:
+  build-and-deploy:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ github.event.inputs.dotnet_version }}
+
+      # Restore + Publish Frontend (only if selected)
+      - name: Restore (frontend)
+        if: ${{ github.event.inputs.app == 'frontend' }}
+        run: dotnet restore "${{ env.FRONTEND_PROJECT }}"
+      - name: Publish (frontend)
+        if: ${{ github.event.inputs.app == 'frontend' }}
+        run: dotnet publish "${{ env.FRONTEND_PROJECT }}" -c "${{ env.CONFIGURATION }}" -o "${{ env.PUBLISH_DIR }}"
+
+      # Restore + Publish Backend (only if selected)
+      - name: Restore (backend)
+        if: ${{ github.event.inputs.app == 'backend' }}
+        run: dotnet restore "${{ env.BACKEND_PROJECT }}"
+      - name: Publish (backend)
+        if: ${{ github.event.inputs.app == 'backend' }}
+        run: dotnet publish "${{ env.BACKEND_PROJECT }}" -c "${{ env.CONFIGURATION }}" -o "${{ env.PUBLISH_DIR }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-${{ github.event.inputs.app }}
+          path: ${{ env.PUBLISH_DIR }}
+
+      # ===== Deploy with publish profile =====
+      # Provide the publish profile XML as repository secrets:
+      # - FRONTEND_PUBLISH_PROFILE
+      # - BACKEND_PUBLISH_PROFILE
+      #
+      # You can export the profile from Azure Portal: Web App -> Get publish profile
+      - name: Deploy Frontend to Azure Web App
+        if: ${{ github.event.inputs.app == 'frontend' }}
+        uses: azure/webapps-deploy@v3
+        with:
+          # If you include "app-name" it must match the app in the publish profile. It's optional when publish-profile is provided.
+          publish-profile: ${{ secrets.FRONTEND_PUBLISH_PROFILE }}
+          package: ${{ env.PUBLISH_DIR }}
+
+      - name: Deploy Backend to Azure Web App
+        if: ${{ github.event.inputs.app == 'backend' }}
+        uses: azure/webapps-deploy@v3
+        with:
+          publish-profile: ${{ secrets.BACKEND_PUBLISH_PROFILE }}
+          package: ${{ env.PUBLISH_DIR }}
