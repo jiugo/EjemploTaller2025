@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       app:
-        description: "Choose which project to deploy"
+        description: "Elegir proyecto a desplegar"
         required: true
         type: choice
         options:
@@ -36,34 +36,64 @@ jobs:
         with:
           dotnet-version: ${{ github.event.inputs.dotnet_version }}
 
-      # Descubrir rutas reales de los csproj (tolerante a espacios y subcarpetas)
-      - name: Locate project files
+      - name: Print repo tree (first 3 levels)
+        shell: bash
+        run: |
+          echo "== TOP LEVEL =="
+          ls -la
+          echo "== *.sln and *.csproj (depth<=4) =="
+          find . -maxdepth 4 -type f \( -name "*.sln" -o -name "*.csproj" \) -print
+
+      # Localiza los csproj de forma robusta (nombres o carpetas Frontend/Backend)
+      - name: Locate project files (robust)
         shell: pwsh
         run: |
-          $fe = Get-ChildItem -Path . -Recurse -Filter Frontend.csproj | Select-Object -First 1
-          $be = Get-ChildItem -Path . -Recurse -Filter Backend.csproj  | Select-Object -First 1
+          Write-Host "== Listing all .csproj files =="
+          $all = Get-ChildItem -Path . -Recurse -File -Filter *.csproj
+          $all | ForEach-Object { Write-Host " - $($_.FullName)" }
 
-          if (-not $fe) { Write-Error "Frontend.csproj not found in repo" }
-          if (-not $be) { Write-Error "Backend.csproj not found in repo" }
+          # Heurísticas por nombre (case-insensitive)
+          $fe = $all | Where-Object { $_.Name -match '(?i)front(end)?' } | Select-Object -First 1
+          $be = $all | Where-Object { $_.Name -match '(?i)back(end)?' }  | Select-Object -First 1
 
-          "FRONTEND_PROJECT=$($fe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "BACKEND_PROJECT=$($be.FullName)"  | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          # Fallback por carpeta
+          if (-not $fe) { $fe = $all | Where-Object { $_.FullName -match '(?i)[/\\]Frontend[/\\]' } | Select-Object -First 1 }
+          if (-not $be) { $be = $all | Where-Object { $_.FullName -match '(?i)[/\\]Backend[/\\]' }  | Select-Object -First 1 }
 
-          Write-Host "Frontend project: $($fe.FullName)"
-          Write-Host "Backend project:  $($be.FullName)"
+          if ($fe) {
+            "FRONTEND_PROJECT=$($fe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            Write-Host "Frontend project: $($fe.FullName)"
+          }
+          if ($be) {
+            "BACKEND_PROJECT=$($be.FullName)"  | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            Write-Host "Backend project:  $($be.FullName)"
+          }
 
-      # Frontend
+          if ("${{ github.event.inputs.app }}" -eq "frontend" -and -not $fe) {
+            Write-Host "::error ::No se encontró un proyecto de frontend. Proyectos detectados:"
+            $all | ForEach-Object { Write-Host " - $($_.FullName)" }
+            exit 1
+          }
+          if ("${{ github.event.inputs.app }}" -eq "backend" -and -not $be) {
+            Write-Host "::error ::No se encontró un proyecto de backend. Proyectos detectados:"
+            $all | ForEach-Object { Write-Host " - $($_.FullName)" }
+            exit 1
+          }
+
+      # ---------- FRONTEND ----------
       - name: Restore (frontend)
         if: ${{ github.event.inputs.app == 'frontend' }}
         run: dotnet restore "${{ env.FRONTEND_PROJECT }}"
+
       - name: Publish (frontend)
         if: ${{ github.event.inputs.app == 'frontend' }}
         run: dotnet publish "${{ env.FRONTEND_PROJECT }}" -c "${{ env.CONFIGURATION }}" -o "${{ env.PUBLISH_DIR }}"
 
-      # Backend
+      # ---------- BACKEND ----------
       - name: Restore (backend)
         if: ${{ github.event.inputs.app == 'backend' }}
         run: dotnet restore "${{ env.BACKEND_PROJECT }}"
+
       - name: Publish (backend)
         if: ${{ github.event.inputs.app == 'backend' }}
         run: dotnet publish "${{ env.BACKEND_PROJECT }}" -c "${{ env.CONFIGURATION }}" -o "${{ env.PUBLISH_DIR }}"
@@ -74,7 +104,7 @@ jobs:
           name: app-${{ github.event.inputs.app }}
           path: ${{ env.PUBLISH_DIR }}
 
-      # Deploy con Publish Profile (poné los secrets en el repo o environment)
+      # Deploy usando Publish Profile (agregar los Repository secrets con el XML)
       - name: Deploy Frontend to Azure Web App
         if: ${{ github.event.inputs.app == 'frontend' }}
         uses: azure/webapps-deploy@v3
@@ -88,4 +118,3 @@ jobs:
         with:
           publish-profile: ${{ secrets.BACKEND_PUBLISH_PROFILE }}
           package: ${{ env.PUBLISH_DIR }}
-
